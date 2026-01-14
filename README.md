@@ -13,6 +13,11 @@ Na raiz do projeto:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
+**Obs**: se o PowerShell bloquear entrar no modo .venv, usar o bash ou alternativamente colocar:
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
 
 ### 2) Instalar o projeto
 ```powershell
