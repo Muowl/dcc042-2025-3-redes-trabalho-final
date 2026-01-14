@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rudp-tf"
+version = "0.1.0"
+description = "TF Redes: protocolo confiável sobre UDP (UFJF DCC042)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+rudp = "rudp.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
