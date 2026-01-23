@@ -23,3 +23,8 @@ class Connection:
     local_seq: int = 0      # Próximo seq a enviar
     remote_seq: int = 0     # Último seq recebido do peer
     last_ack: int = 0       # Último ACK enviado
+    # Buffer de dados recebidos (servidor)
+    recv_buffer: bytes = field(default=b"")
+    # Métricas
+    packets_recv: int = 0
+    bytes_recv: int = 0

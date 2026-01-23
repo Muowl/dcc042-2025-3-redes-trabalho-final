@@ -59,14 +59,19 @@ class RUDPServer:
             log.debug("ACK recebido ack=%d de %s", pkt.ack, addr)
 
     def _handle_data(self, pkt: Packet, addr: tuple[str, int], sock: socket.socket) -> None:
-        """Trata pacote DATA: recebe dados e envia ACK."""
+        """Trata pacote DATA: recebe dados, acumula no buffer e envia ACK."""
         conn = self.connections.get(addr)
         if not conn or conn.state != ConnectionState.ESTABLISHED:
             log.warning("DATA recebido sem conexão estabelecida de %s", addr)
             return
         
-        log.info("DATA de %s seq=%d len=%d payload=%r", 
-                 addr, pkt.seq, len(pkt.payload), pkt.payload.decode("utf-8", errors="replace"))
+        # Acumular dados no buffer
+        conn.recv_buffer += pkt.payload
+        conn.packets_recv += 1
+        conn.bytes_recv += len(pkt.payload)
+        
+        log.debug("DATA de %s seq=%d len=%d (total: %d bytes, %d pacotes)", 
+                 addr, pkt.seq, len(pkt.payload), conn.bytes_recv, conn.packets_recv)
         
         conn.remote_seq = pkt.seq
         
@@ -80,7 +85,6 @@ class RUDPServer:
             payload=b"",
         )
         sock.sendto(ack_pkt.encode(), addr)
-        log.info("ACK enviado para %s (ack=%d)", addr, pkt.seq)
 
     def _handle_fin(self, pkt: Packet, addr: tuple[str, int], sock: socket.socket) -> None:
         """Trata pacote FIN: encerra conexão."""
@@ -102,7 +106,10 @@ class RUDPServer:
             payload=b"",
         )
         sock.sendto(ack_pkt.encode(), addr)
-        log.info("ACK do FIN enviado para %s", addr)
+        
+        # Log de métricas antes de encerrar
+        log.info("Conexão com %s: %d pacotes, %d bytes recebidos", 
+                 addr, conn.packets_recv, conn.bytes_recv)
         
         # Remover conexão
         del self.connections[addr]

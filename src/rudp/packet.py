@@ -13,6 +13,9 @@ PT_SYN_ACK = 0x05
 # Flags (placeholder)
 FL_NONE = 0x00
 
+# Tamanho máximo do payload por pacote (para fragmentação)
+PAYLOAD_SIZE = 1024
+
 # Cabeçalho fixo:
 # magic(2) ver(1) type(1) flags(1) hdr_len(1) seq(4) ack(4) wnd(4) payload_len(2) crc32(4)
 MAGIC = b"RU"

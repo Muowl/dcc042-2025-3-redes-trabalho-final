@@ -1,16 +1,27 @@
-"""Cliente RUDP com suporte a handshake e estado de conexão."""
+"""Cliente RUDP com suporte a handshake, envio de múltiplos pacotes e métricas."""
 from __future__ import annotations
 import socket
 import logging
 import random
-from rudp.packet import Packet, PT_DATA, PT_ACK, PT_SYN, PT_SYN_ACK, PT_FIN
+from dataclasses import dataclass
+from rudp.packet import Packet, PT_DATA, PT_ACK, PT_SYN, PT_SYN_ACK, PT_FIN, PAYLOAD_SIZE
 from rudp.connection import Connection, ConnectionState
+from rudp.utils import now_ms
 
 log = logging.getLogger("rudp.client")
 
 
+@dataclass
+class TransferStats:
+    """Métricas de uma transferência de dados."""
+    packets_sent: int
+    bytes_sent: int
+    time_ms: int
+    throughput_kbps: float
+
+
 class RUDPClient:
-    """Cliente RUDP com 3-way handshake."""
+    """Cliente RUDP com 3-way handshake e envio de múltiplos pacotes."""
     
     def __init__(self, host: str, port: int, timeout_s: float = 1.0):
         self.host = host
@@ -75,35 +86,66 @@ class RUDPClient:
             self.conn.state = ConnectionState.CLOSED
             return False
 
-    def send_message(self, message: str) -> None:
-        """Envia mensagem (requer conexão estabelecida)."""
+    def send_data(self, data: bytes) -> TransferStats:
+        """Fragmenta dados e envia em múltiplos pacotes."""
         if self.conn.state != ConnectionState.ESTABLISHED:
             log.error("Não é possível enviar: conexão não estabelecida (state=%s)", 
                       self.conn.state.name)
-            return
+            return TransferStats(0, 0, 0, 0.0)
         
-        self.conn.local_seq += 1
-        pkt = Packet(
-            ptype=PT_DATA,
-            flags=0,
-            seq=self.conn.local_seq,
-            ack=self.conn.remote_seq,
-            wnd=0,
-            payload=message.encode("utf-8"),
+        start_ms = now_ms()
+        packets_sent = 0
+        bytes_sent = 0
+        
+        # Fragmentar em chunks
+        chunks = [data[i:i+PAYLOAD_SIZE] for i in range(0, len(data), PAYLOAD_SIZE)]
+        total_chunks = len(chunks)
+        
+        log.info("Enviando %d bytes em %d pacotes", len(data), total_chunks)
+        
+        for i, chunk in enumerate(chunks):
+            self.conn.local_seq += 1
+            pkt = Packet(
+                ptype=PT_DATA,
+                flags=0,
+                seq=self.conn.local_seq,
+                ack=self.conn.remote_seq,
+                wnd=0,
+                payload=chunk,
+            )
+            self.sock.sendto(pkt.encode(), (self.host, self.port))
+            packets_sent += 1
+            bytes_sent += len(chunk)
+            log.debug("DATA [%d/%d] seq=%d len=%d", i+1, total_chunks, self.conn.local_seq, len(chunk))
+            
+            # Aguarda ACK (stop-and-wait por enquanto, será otimizado depois)
+            try:
+                raw, _ = self.sock.recvfrom(65535)
+                ack = Packet.decode(raw)
+                if ack.ptype == PT_ACK:
+                    log.debug("ACK recebido ack=%d", ack.ack)
+                    self.conn.last_ack = ack.ack
+                else:
+                    log.warning("Pacote inesperado ptype=%d", ack.ptype)
+            except socket.timeout:
+                log.warning("Timeout esperando ACK para seq=%d", self.conn.local_seq)
+        
+        elapsed_ms = now_ms() - start_ms
+        throughput = (bytes_sent / 1024) / (elapsed_ms / 1000) if elapsed_ms > 0 else 0.0
+        
+        stats = TransferStats(
+            packets_sent=packets_sent,
+            bytes_sent=bytes_sent,
+            time_ms=elapsed_ms,
+            throughput_kbps=throughput,
         )
-        self.sock.sendto(pkt.encode(), (self.host, self.port))
-        log.info("DATA enviado seq=%d len=%d", self.conn.local_seq, len(pkt.payload))
+        log.info("Transferência concluída: %d pacotes, %d bytes, %dms, %.2f KB/s",
+                 stats.packets_sent, stats.bytes_sent, stats.time_ms, stats.throughput_kbps)
+        return stats
 
-        try:
-            raw, _ = self.sock.recvfrom(65535)
-            ack = Packet.decode(raw)
-            if ack.ptype == PT_ACK:
-                log.info("ACK recebido ack=%d wnd=%d", ack.ack, ack.wnd)
-                self.conn.last_ack = ack.ack
-            else:
-                log.warning("Pacote inesperado ptype=%d", ack.ptype)
-        except socket.timeout:
-            log.warning("Timeout esperando ACK")
+    def send_message(self, message: str) -> None:
+        """Envia mensagem (wrapper para send_data)."""
+        self.send_data(message.encode("utf-8"))
 
     def close(self) -> None:
         """Encerra conexão com FIN."""
