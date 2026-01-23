@@ -95,6 +95,22 @@ class RUDPClient:
         retries = 0
         
         while retries <= MAX_RETRIES:
+            # Verificar controle de fluxo (rwnd)
+            if self.conn.remote_wnd == 0:
+                log.debug("rwnd=0, aguardando...")
+                # Espera por um ACK que libere a janela
+                try:
+                    raw, _ = self.sock.recvfrom(65535)
+                    ack = Packet.decode(raw)
+                    if ack.ptype == PT_ACK:
+                        self.conn.remote_wnd = ack.wnd
+                        log.debug("rwnd atualizado para %d", ack.wnd)
+                        if ack.wnd == 0:
+                            continue
+                except socket.timeout:
+                    retries += 1
+                    continue
+            
             self.sock.sendto(pkt.encode(), (self.host, self.port))
             
             if retries > 0:
@@ -105,9 +121,13 @@ class RUDPClient:
                 ack = Packet.decode(raw)
                 
                 if ack.ptype == PT_ACK:
+                    # Atualizar rwnd do servidor
+                    self.conn.remote_wnd = ack.wnd
+                    
                     # ACK cumulativo: confirma tudo até ack.ack
                     if ack.ack >= pkt.seq:
-                        log.debug("ACK recebido ack=%d (confirmou seq=%d)", ack.ack, pkt.seq)
+                        log.debug("ACK recebido ack=%d wnd=%d (confirmou seq=%d)", 
+                                 ack.ack, ack.wnd, pkt.seq)
                         self.conn.last_ack = ack.ack
                         return True, retries
                     else:

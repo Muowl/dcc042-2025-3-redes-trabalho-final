@@ -106,16 +106,20 @@ class RUDPServer:
                  seq, conn.expected_seq, conn.bytes_recv)
     
     def _send_ack(self, sock: socket.socket, addr: tuple[str, int], ack_num: int) -> None:
-        """Envia ACK cumulativo."""
+        """Envia ACK cumulativo com rwnd."""
+        conn = self.connections.get(addr)
+        rwnd = conn.get_rwnd() if conn else 64
+        
         ack_pkt = Packet(
             ptype=PT_ACK,
             flags=0,
             seq=0,
             ack=ack_num,
-            wnd=64,
+            wnd=rwnd,
             payload=b"",
         )
         sock.sendto(ack_pkt.encode(), addr)
+        log.debug("ACK enviado ack=%d wnd=%d", ack_num, rwnd)
 
     def _handle_fin(self, pkt: Packet, addr: tuple[str, int], sock: socket.socket) -> None:
         """Trata pacote FIN: encerra conexão."""

@@ -30,8 +30,17 @@ class Connection:
     
     # Buffer de dados recebidos (servidor) - em ordem
     recv_buffer: bytes = field(default=b"")
+    recv_buffer_max: int = 65536  # Limite do buffer (64KB default)
+    
+    # Controle de fluxo (cliente)
+    remote_wnd: int = 64    # rwnd anunciado pelo servidor (em pacotes)
     
     # Métricas
     packets_recv: int = 0
     bytes_recv: int = 0
     packets_dropped: int = 0  # Duplicatas descartadas
+    
+    def get_rwnd(self, payload_size: int = 1024) -> int:
+        """Calcula rwnd disponível (em pacotes)."""
+        bytes_free = max(0, self.recv_buffer_max - len(self.recv_buffer))
+        return bytes_free // payload_size
