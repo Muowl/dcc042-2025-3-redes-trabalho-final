@@ -13,6 +13,10 @@ log = logging.getLogger("rudp.client")
 # Configurações de retransmissão
 MAX_RETRIES = 5  # Máximo de retransmissões por pacote
 
+# Configurações de controle de congestionamento
+INITIAL_CWND = 1
+INITIAL_SSTHRESH = 64
+
 
 @dataclass
 class TransferStats:
@@ -22,6 +26,7 @@ class TransferStats:
     time_ms: int
     throughput_kbps: float
     retransmissions: int = 0
+    cwnd_history: list = None  # Histórico de cwnd para gráficos
 
 
 class RUDPClient:
@@ -144,24 +149,38 @@ class RUDPClient:
         return False, retries
 
     def send_data(self, data: bytes) -> TransferStats:
-        """Fragmenta dados e envia em múltiplos pacotes com retransmissão."""
+        """Fragmenta dados e envia com retransmissão e controle de congestionamento."""
         if self.conn.state != ConnectionState.ESTABLISHED:
             log.error("Não é possível enviar: conexão não estabelecida (state=%s)", 
                       self.conn.state.name)
-            return TransferStats(0, 0, 0, 0.0, 0)
+            return TransferStats(0, 0, 0, 0.0, 0, [])
         
         start_ms = now_ms()
         packets_sent = 0
         bytes_sent = 0
         total_retransmissions = 0
+        cwnd_history = []
+        
+        # Inicializar CC
+        self.conn.cwnd = INITIAL_CWND
+        self.conn.ssthresh = INITIAL_SSTHRESH
         
         # Fragmentar em chunks
         chunks = [data[i:i+PAYLOAD_SIZE] for i in range(0, len(data), PAYLOAD_SIZE)]
         total_chunks = len(chunks)
         
-        log.info("Enviando %d bytes em %d pacotes", len(data), total_chunks)
+        log.info("Enviando %d bytes em %d pacotes (cwnd=%d, ssthresh=%d)", 
+                 len(data), total_chunks, self.conn.cwnd, self.conn.ssthresh)
         
         for i, chunk in enumerate(chunks):
+            # Registrar cwnd atual
+            cwnd_history.append(self.conn.cwnd)
+            
+            # Janela efetiva: min(cwnd, rwnd)
+            effective_wnd = min(self.conn.cwnd, self.conn.remote_wnd)
+            log.debug("Janela efetiva: min(cwnd=%d, rwnd=%d) = %d", 
+                     self.conn.cwnd, self.conn.remote_wnd, effective_wnd)
+            
             self.conn.local_seq += 1
             pkt = Packet(
                 ptype=PT_DATA,
@@ -172,7 +191,8 @@ class RUDPClient:
                 payload=chunk,
             )
             
-            log.debug("DATA [%d/%d] seq=%d len=%d", i+1, total_chunks, self.conn.local_seq, len(chunk))
+            log.debug("DATA [%d/%d] seq=%d cwnd=%d", i+1, total_chunks, 
+                     self.conn.local_seq, self.conn.cwnd)
             
             success, retries = self._send_packet_reliable(pkt)
             total_retransmissions += retries
@@ -180,6 +200,24 @@ class RUDPClient:
             if success:
                 packets_sent += 1
                 bytes_sent += len(chunk)
+                
+                # Controle de congestionamento: sucesso
+                if retries == 0:
+                    # Sem timeout: aumentar cwnd
+                    if self.conn.cwnd < self.conn.ssthresh:
+                        # Slow Start: dobra (cresce exponencialmente)
+                        self.conn.cwnd = min(self.conn.cwnd * 2, self.conn.ssthresh)
+                        log.debug("Slow Start: cwnd → %d", self.conn.cwnd)
+                    else:
+                        # Congestion Avoidance: cresce linearmente
+                        self.conn.cwnd += 1
+                        log.debug("Congestion Avoidance: cwnd → %d", self.conn.cwnd)
+                else:
+                    # Houve timeout/retransmissão: reduzir
+                    self.conn.ssthresh = max(self.conn.cwnd // 2, 1)
+                    self.conn.cwnd = INITIAL_CWND
+                    log.debug("Timeout detectado: ssthresh=%d, cwnd=%d", 
+                             self.conn.ssthresh, self.conn.cwnd)
             else:
                 log.error("Falha ao enviar pacote seq=%d, abortando", self.conn.local_seq)
                 break
@@ -193,10 +231,11 @@ class RUDPClient:
             time_ms=elapsed_ms,
             throughput_kbps=throughput,
             retransmissions=total_retransmissions,
+            cwnd_history=cwnd_history,
         )
-        log.info("Transferência: %d pacotes, %d bytes, %dms, %.2f KB/s, %d retransmissões",
+        log.info("Transferência: %d pkts, %d bytes, %dms, %.2f KB/s, %d retx, cwnd_final=%d",
                  stats.packets_sent, stats.bytes_sent, stats.time_ms, 
-                 stats.throughput_kbps, stats.retransmissions)
+                 stats.throughput_kbps, stats.retransmissions, self.conn.cwnd)
         return stats
 
     def send_message(self, message: str) -> None:

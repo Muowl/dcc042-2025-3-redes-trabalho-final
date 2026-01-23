@@ -35,6 +35,10 @@ class Connection:
     # Controle de fluxo (cliente)
     remote_wnd: int = 64    # rwnd anunciado pelo servidor (em pacotes)
     
+    # Controle de congestionamento (cliente)
+    cwnd: int = 1           # Janela de congestionamento (em pacotes)
+    ssthresh: int = 64      # Slow start threshold
+    
     # Métricas
     packets_recv: int = 0
     bytes_recv: int = 0
