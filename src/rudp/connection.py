@@ -23,8 +23,15 @@ class Connection:
     local_seq: int = 0      # Próximo seq a enviar
     remote_seq: int = 0     # Último seq recebido do peer
     last_ack: int = 0       # Último ACK enviado
-    # Buffer de dados recebidos (servidor)
+    
+    # Entrega ordenada (servidor)
+    expected_seq: int = 0   # Próximo seq esperado em ordem
+    out_of_order: dict = field(default_factory=dict)  # seq → payload (buffer)
+    
+    # Buffer de dados recebidos (servidor) - em ordem
     recv_buffer: bytes = field(default=b"")
+    
     # Métricas
     packets_recv: int = 0
     bytes_recv: int = 0
+    packets_dropped: int = 0  # Duplicatas descartadas

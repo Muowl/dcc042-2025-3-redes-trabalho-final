@@ -54,33 +54,64 @@ class RUDPServer:
         if conn.state == ConnectionState.SYN_RECEIVED:
             # Completar handshake
             conn.state = ConnectionState.ESTABLISHED
-            log.info("Conexão ESTABLISHED com %s", addr)
+            # Inicializar expected_seq para o próximo DATA esperado
+            conn.expected_seq = pkt.seq + 1
+            log.info("Conexão ESTABLISHED com %s (expected_seq=%d)", addr, conn.expected_seq)
         elif conn.state == ConnectionState.ESTABLISHED:
             log.debug("ACK recebido ack=%d de %s", pkt.ack, addr)
 
     def _handle_data(self, pkt: Packet, addr: tuple[str, int], sock: socket.socket) -> None:
-        """Trata pacote DATA: recebe dados, acumula no buffer e envia ACK."""
+        """Trata pacote DATA com entrega ordenada."""
         conn = self.connections.get(addr)
         if not conn or conn.state != ConnectionState.ESTABLISHED:
             log.warning("DATA recebido sem conexão estabelecida de %s", addr)
             return
         
-        # Acumular dados no buffer
-        conn.recv_buffer += pkt.payload
+        seq = pkt.seq
+        
+        # Verificar duplicata (seq < expected_seq)
+        if seq < conn.expected_seq:
+            log.debug("Duplicata descartada: seq=%d (expected=%d)", seq, conn.expected_seq)
+            conn.packets_dropped += 1
+            # Ainda envia ACK para confirmar recebimento
+            self._send_ack(sock, addr, conn.expected_seq - 1)
+            return
+        
+        # Pacote em ordem?
+        if seq == conn.expected_seq:
+            # Entregar este pacote
+            self._deliver_packet(conn, pkt.payload, seq)
+            
+            # Verificar buffer de fora de ordem para pacotes consecutivos
+            while conn.expected_seq in conn.out_of_order:
+                payload = conn.out_of_order.pop(conn.expected_seq)
+                self._deliver_packet(conn, payload, conn.expected_seq)
+        else:
+            # Fora de ordem: bufferizar
+            if seq not in conn.out_of_order:
+                conn.out_of_order[seq] = pkt.payload
+                log.debug("Fora de ordem: seq=%d bufferizado (expected=%d, buffer=%d)", 
+                         seq, conn.expected_seq, len(conn.out_of_order))
+        
+        # Enviar ACK cumulativo (último em ordem)
+        self._send_ack(sock, addr, conn.expected_seq - 1)
+    
+    def _deliver_packet(self, conn: Connection, payload: bytes, seq: int) -> None:
+        """Entrega pacote em ordem para o buffer da aplicação."""
+        conn.recv_buffer += payload
         conn.packets_recv += 1
-        conn.bytes_recv += len(pkt.payload)
-        
-        log.debug("DATA de %s seq=%d len=%d (total: %d bytes, %d pacotes)", 
-                 addr, pkt.seq, len(pkt.payload), conn.bytes_recv, conn.packets_recv)
-        
-        conn.remote_seq = pkt.seq
-        
-        # Enviar ACK
+        conn.bytes_recv += len(payload)
+        conn.expected_seq = seq + 1
+        log.debug("Entregue seq=%d (próximo=%d, total=%d bytes)", 
+                 seq, conn.expected_seq, conn.bytes_recv)
+    
+    def _send_ack(self, sock: socket.socket, addr: tuple[str, int], ack_num: int) -> None:
+        """Envia ACK cumulativo."""
         ack_pkt = Packet(
             ptype=PT_ACK,
             flags=0,
             seq=0,
-            ack=pkt.seq,
+            ack=ack_num,
             wnd=64,
             payload=b"",
         )
