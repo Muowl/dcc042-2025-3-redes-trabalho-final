@@ -8,6 +8,7 @@ PT_DATA = 0x01
 PT_ACK  = 0x02
 PT_SYN  = 0x03
 PT_FIN  = 0x04
+PT_SYN_ACK = 0x05
 
 # Flags (placeholder)
 FL_NONE = 0x00

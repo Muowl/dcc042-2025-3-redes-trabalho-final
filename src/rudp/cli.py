@@ -1,12 +1,15 @@
+"""CLI para protocolo RUDP."""
 from __future__ import annotations
 import argparse
 import logging
 from rudp.server import RUDPServer
 from rudp.client import RUDPClient
 
+
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="rudp", description="TF Redes: protocolo confiável sobre UDP")
@@ -31,7 +34,13 @@ def main() -> None:
     if args.cmd == "server":
         RUDPServer(bind=args.bind, port=args.port, drop_prob=args.drop).run()
     elif args.cmd == "client":
-        RUDPClient(host=args.host, port=args.port, timeout_s=args.timeout).send_message(args.message)
+        client = RUDPClient(host=args.host, port=args.port, timeout_s=args.timeout)
+        if client.connect():
+            client.send_message(args.message)
+            client.close()
+        else:
+            logging.getLogger("rudp.cli").error("Falha ao conectar")
+
 
 if __name__ == "__main__":
     main()
