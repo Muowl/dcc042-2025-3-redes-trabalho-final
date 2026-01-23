@@ -1,4 +1,4 @@
-"""Cliente RUDP com suporte a handshake, envio de múltiplos pacotes e métricas."""
+"""Cliente RUDP com suporte a handshake, envio de múltiplos pacotes, métricas e retransmissão."""
 from __future__ import annotations
 import socket
 import logging
@@ -10,6 +10,9 @@ from rudp.utils import now_ms
 
 log = logging.getLogger("rudp.client")
 
+# Configurações de retransmissão
+MAX_RETRIES = 5  # Máximo de retransmissões por pacote
+
 
 @dataclass
 class TransferStats:
@@ -18,10 +21,11 @@ class TransferStats:
     bytes_sent: int
     time_ms: int
     throughput_kbps: float
+    retransmissions: int = 0
 
 
 class RUDPClient:
-    """Cliente RUDP com 3-way handshake e envio de múltiplos pacotes."""
+    """Cliente RUDP com 3-way handshake, envio de múltiplos pacotes e retransmissão."""
     
     def __init__(self, host: str, port: int, timeout_s: float = 1.0):
         self.host = host
@@ -86,16 +90,50 @@ class RUDPClient:
             self.conn.state = ConnectionState.CLOSED
             return False
 
+    def _send_packet_reliable(self, pkt: Packet) -> tuple[bool, int]:
+        """Envia pacote com retransmissão. Retorna (sucesso, retransmissões)."""
+        retries = 0
+        
+        while retries <= MAX_RETRIES:
+            self.sock.sendto(pkt.encode(), (self.host, self.port))
+            
+            if retries > 0:
+                log.debug("Retransmissão [%d/%d] seq=%d", retries, MAX_RETRIES, pkt.seq)
+            
+            try:
+                raw, _ = self.sock.recvfrom(65535)
+                ack = Packet.decode(raw)
+                
+                if ack.ptype == PT_ACK:
+                    # ACK cumulativo: confirma tudo até ack.ack
+                    if ack.ack >= pkt.seq:
+                        log.debug("ACK recebido ack=%d (confirmou seq=%d)", ack.ack, pkt.seq)
+                        self.conn.last_ack = ack.ack
+                        return True, retries
+                    else:
+                        log.debug("ACK parcial ack=%d (esperava >= %d)", ack.ack, pkt.seq)
+                else:
+                    log.warning("Pacote inesperado ptype=%d", ack.ptype)
+                    
+            except socket.timeout:
+                retries += 1
+                if retries <= MAX_RETRIES:
+                    log.debug("Timeout para seq=%d, tentativa %d/%d", pkt.seq, retries, MAX_RETRIES)
+        
+        log.warning("Falha após %d retransmissões para seq=%d", MAX_RETRIES, pkt.seq)
+        return False, retries
+
     def send_data(self, data: bytes) -> TransferStats:
-        """Fragmenta dados e envia em múltiplos pacotes."""
+        """Fragmenta dados e envia em múltiplos pacotes com retransmissão."""
         if self.conn.state != ConnectionState.ESTABLISHED:
             log.error("Não é possível enviar: conexão não estabelecida (state=%s)", 
                       self.conn.state.name)
-            return TransferStats(0, 0, 0, 0.0)
+            return TransferStats(0, 0, 0, 0.0, 0)
         
         start_ms = now_ms()
         packets_sent = 0
         bytes_sent = 0
+        total_retransmissions = 0
         
         # Fragmentar em chunks
         chunks = [data[i:i+PAYLOAD_SIZE] for i in range(0, len(data), PAYLOAD_SIZE)]
@@ -113,22 +151,18 @@ class RUDPClient:
                 wnd=0,
                 payload=chunk,
             )
-            self.sock.sendto(pkt.encode(), (self.host, self.port))
-            packets_sent += 1
-            bytes_sent += len(chunk)
+            
             log.debug("DATA [%d/%d] seq=%d len=%d", i+1, total_chunks, self.conn.local_seq, len(chunk))
             
-            # Aguarda ACK (stop-and-wait por enquanto, será otimizado depois)
-            try:
-                raw, _ = self.sock.recvfrom(65535)
-                ack = Packet.decode(raw)
-                if ack.ptype == PT_ACK:
-                    log.debug("ACK recebido ack=%d", ack.ack)
-                    self.conn.last_ack = ack.ack
-                else:
-                    log.warning("Pacote inesperado ptype=%d", ack.ptype)
-            except socket.timeout:
-                log.warning("Timeout esperando ACK para seq=%d", self.conn.local_seq)
+            success, retries = self._send_packet_reliable(pkt)
+            total_retransmissions += retries
+            
+            if success:
+                packets_sent += 1
+                bytes_sent += len(chunk)
+            else:
+                log.error("Falha ao enviar pacote seq=%d, abortando", self.conn.local_seq)
+                break
         
         elapsed_ms = now_ms() - start_ms
         throughput = (bytes_sent / 1024) / (elapsed_ms / 1000) if elapsed_ms > 0 else 0.0
@@ -138,9 +172,11 @@ class RUDPClient:
             bytes_sent=bytes_sent,
             time_ms=elapsed_ms,
             throughput_kbps=throughput,
+            retransmissions=total_retransmissions,
         )
-        log.info("Transferência concluída: %d pacotes, %d bytes, %dms, %.2f KB/s",
-                 stats.packets_sent, stats.bytes_sent, stats.time_ms, stats.throughput_kbps)
+        log.info("Transferência: %d pacotes, %d bytes, %dms, %.2f KB/s, %d retransmissões",
+                 stats.packets_sent, stats.bytes_sent, stats.time_ms, 
+                 stats.throughput_kbps, stats.retransmissions)
         return stats
 
     def send_message(self, message: str) -> None:
