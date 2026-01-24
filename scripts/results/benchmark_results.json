@@ -1,0 +1,47 @@
+[
+  {
+    "scenario": "Sem perdas",
+    "packets_sent": 64,
+    "throughput_kbps": 34.501347708894876,
+    "retransmissions": 6,
+    "time_ms": 1855,
+    "drop_rate": 0.0,
+    "crypto": false
+  },
+  {
+    "scenario": "Sem perdas + Crypto",
+    "packets_sent": 64,
+    "throughput_kbps": 34.51995685005394,
+    "retransmissions": 6,
+    "time_ms": 1854,
+    "drop_rate": 0.0,
+    "crypto": true
+  },
+  {
+    "scenario": "5% perdas",
+    "packets_sent": 64,
+    "throughput_kbps": 17.250673854447438,
+    "retransmissions": 12,
+    "time_ms": 3710,
+    "drop_rate": 0.05,
+    "crypto": false
+  },
+  {
+    "scenario": "5% perdas + Crypto",
+    "packets_sent": 0,
+    "throughput_kbps": 0,
+    "retransmissions": 0,
+    "time_ms": 0,
+    "drop_rate": 0.05,
+    "crypto": true
+  },
+  {
+    "scenario": "10% perdas",
+    "packets_sent": 64,
+    "throughput_kbps": 20.618556701030926,
+    "retransmissions": 10,
+    "time_ms": 3104,
+    "drop_rate": 0.1,
+    "crypto": false
+  }
+]

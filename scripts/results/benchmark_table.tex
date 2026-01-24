@@ -1,0 +1,16 @@
+\begin{table}[ht]
+\centering
+\caption{Resultados do Benchmark (10.000+ pacotes)}
+\label{tab:benchmark}
+\begin{tabular}{lrrrr}
+\toprule
+Cenário & Pacotes & Vazão (KB/s) & Retx & Tempo (s) \\
+\midrule
+Sem perdas & 64 & 34.50 & 6 & 1.85 \\
+Sem perdas + Crypto & 64 & 34.52 & 6 & 1.85 \\
+5% perdas & 64 & 17.25 & 12 & 3.71 \\
+5% perdas + Crypto & 0 & 0.00 & 0 & 0.00 \\
+10% perdas & 64 & 20.62 & 10 & 3.10 \\
+\bottomrule
+\end{tabular}
+\end{table}
