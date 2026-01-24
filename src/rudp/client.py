@@ -1,4 +1,4 @@
-"""Cliente RUDP com suporte a handshake, envio de múltiplos pacotes, métricas e retransmissão."""
+"""Cliente RUDP com suporte a handshake, criptografia, métricas e retransmissão."""
 from __future__ import annotations
 import socket
 import logging
@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from rudp.packet import Packet, PT_DATA, PT_ACK, PT_SYN, PT_SYN_ACK, PT_FIN, PAYLOAD_SIZE
 from rudp.connection import Connection, ConnectionState
+from rudp.crypto import CryptoContext, NoCrypto
 from rudp.utils import now_ms
 
 log = logging.getLogger("rudp.client")
@@ -30,9 +31,9 @@ class TransferStats:
 
 
 class RUDPClient:
-    """Cliente RUDP com 3-way handshake, envio de múltiplos pacotes e retransmissão."""
+    """Cliente RUDP com 3-way handshake, criptografia e controle de congestionamento."""
     
-    def __init__(self, host: str, port: int, timeout_s: float = 1.0):
+    def __init__(self, host: str, port: int, timeout_s: float = 1.0, use_crypto: bool = True):
         self.host = host
         self.port = port
         self.timeout_s = timeout_s
@@ -41,6 +42,13 @@ class RUDPClient:
         self.conn = Connection()
         # ISN (Initial Sequence Number) aleatório
         self.conn.local_seq = random.randint(0, 0xFFFFFFFF)
+        # Criptografia
+        if use_crypto:
+            self.crypto = CryptoContext()
+            log.info("Criptografia habilitada")
+        else:
+            self.crypto = NoCrypto()
+            log.info("Criptografia desabilitada")
     
     def connect(self) -> bool:
         """Executa 3-way handshake: SYN → SYN-ACK → ACK."""
@@ -48,18 +56,19 @@ class RUDPClient:
             log.warning("Conexão já está em estado %s", self.conn.state.name)
             return False
         
-        # Enviar SYN
+        # Enviar SYN com chave de criptografia no payload
+        crypto_key = self.crypto.get_key() if hasattr(self.crypto, 'get_key') else b""
         syn_pkt = Packet(
             ptype=PT_SYN,
             flags=0,
             seq=self.conn.local_seq,
             ack=0,
             wnd=0,
-            payload=b"",
+            payload=crypto_key,
         )
         self.sock.sendto(syn_pkt.encode(), (self.host, self.port))
         self.conn.state = ConnectionState.SYN_SENT
-        log.info("SYN enviado seq=%d → %s:%d", self.conn.local_seq, self.host, self.port)
+        log.info("SYN enviado seq=%d (crypto_key=%d bytes)", self.conn.local_seq, len(crypto_key))
         
         # Aguardar SYN-ACK
         try:
@@ -182,13 +191,15 @@ class RUDPClient:
                      self.conn.cwnd, self.conn.remote_wnd, effective_wnd)
             
             self.conn.local_seq += 1
+            # Cifrar payload
+            encrypted_chunk = self.crypto.encrypt(chunk)
             pkt = Packet(
                 ptype=PT_DATA,
                 flags=0,
                 seq=self.conn.local_seq,
                 ack=self.conn.remote_seq,
                 wnd=0,
-                payload=chunk,
+                payload=encrypted_chunk,
             )
             
             log.debug("DATA [%d/%d] seq=%d cwnd=%d", i+1, total_chunks, 

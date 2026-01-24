@@ -1,16 +1,17 @@
-"""Servidor RUDP com suporte a handshake e estado de conexão."""
+"""Servidor RUDP com suporte a handshake, criptografia e estado de conexão."""
 from __future__ import annotations
 import socket
 import logging
 from rudp.packet import Packet, PT_DATA, PT_ACK, PT_SYN, PT_SYN_ACK, PT_FIN
 from rudp.connection import Connection, ConnectionState
+from rudp.crypto import CryptoContext, NoCrypto
 from rudp.utils import should_drop
 
 log = logging.getLogger("rudp.server")
 
 
 class RUDPServer:
-    """Servidor RUDP com gerenciamento de conexões e 3-way handshake."""
+    """Servidor RUDP com gerenciamento de conexões, criptografia e 3-way handshake."""
     
     def __init__(self, bind: str, port: int, drop_prob: float = 0.0):
         self.bind = bind
@@ -18,6 +19,8 @@ class RUDPServer:
         self.drop_prob = drop_prob
         # Dicionário de conexões ativas: addr -> Connection
         self.connections: dict[tuple[str, int], Connection] = {}
+        # Dicionário de contextos de criptografia: addr -> CryptoContext
+        self.crypto_contexts: dict[tuple[str, int], CryptoContext | NoCrypto] = {}
 
     def _get_or_create_connection(self, addr: tuple[str, int]) -> Connection:
         """Obtém conexão existente ou cria nova."""
@@ -26,11 +29,23 @@ class RUDPServer:
         return self.connections[addr]
 
     def _handle_syn(self, pkt: Packet, addr: tuple[str, int], sock: socket.socket) -> None:
-        """Trata pacote SYN: inicia handshake."""
+        """Trata pacote SYN: inicia handshake e extrai chave de criptografia."""
         conn = self._get_or_create_connection(addr)
         conn.remote_seq = pkt.seq
         conn.local_seq = 0  # Poderia ser aleatório também
         conn.state = ConnectionState.SYN_RECEIVED
+        
+        # Extrair chave de criptografia do payload (se presente)
+        if pkt.payload and len(pkt.payload) > 0:
+            try:
+                self.crypto_contexts[addr] = CryptoContext(pkt.payload)
+                log.info("Criptografia habilitada para %s", addr)
+            except Exception as e:
+                log.warning("Erro ao criar contexto crypto: %s", e)
+                self.crypto_contexts[addr] = NoCrypto()
+        else:
+            self.crypto_contexts[addr] = NoCrypto()
+            log.debug("Sem criptografia para %s", addr)
         
         # Enviar SYN-ACK
         syn_ack = Packet(
@@ -79,15 +94,27 @@ class RUDPServer:
         
         # Pacote em ordem?
         if seq == conn.expected_seq:
+            # Decifrar payload
+            crypto = self.crypto_contexts.get(addr, NoCrypto())
+            try:
+                decrypted = crypto.decrypt(pkt.payload)
+            except Exception as e:
+                log.warning("Erro ao decifrar payload seq=%d: %s", seq, e)
+                decrypted = pkt.payload
+            
             # Entregar este pacote
-            self._deliver_packet(conn, pkt.payload, seq)
+            self._deliver_packet(conn, decrypted, seq, addr)
             
             # Verificar buffer de fora de ordem para pacotes consecutivos
             while conn.expected_seq in conn.out_of_order:
                 payload = conn.out_of_order.pop(conn.expected_seq)
-                self._deliver_packet(conn, payload, conn.expected_seq)
+                try:
+                    decrypted = crypto.decrypt(payload)
+                except Exception:
+                    decrypted = payload
+                self._deliver_packet(conn, decrypted, conn.expected_seq, addr)
         else:
-            # Fora de ordem: bufferizar
+            # Fora de ordem: bufferizar (ainda cifrado)
             if seq not in conn.out_of_order:
                 conn.out_of_order[seq] = pkt.payload
                 log.debug("Fora de ordem: seq=%d bufferizado (expected=%d, buffer=%d)", 
@@ -96,8 +123,8 @@ class RUDPServer:
         # Enviar ACK cumulativo (último em ordem)
         self._send_ack(sock, addr, conn.expected_seq - 1)
     
-    def _deliver_packet(self, conn: Connection, payload: bytes, seq: int) -> None:
-        """Entrega pacote em ordem para o buffer da aplicação."""
+    def _deliver_packet(self, conn: Connection, payload: bytes, seq: int, addr: tuple = None) -> None:
+        """Entrega pacote decifrado em ordem para o buffer da aplicação."""
         conn.recv_buffer += payload
         conn.packets_recv += 1
         conn.bytes_recv += len(payload)
