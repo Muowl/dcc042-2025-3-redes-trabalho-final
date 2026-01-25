@@ -1,0 +1,79 @@
+[
+  {
+    "scenario": "Sem perdas (CC on)",
+    "packets_sent": 10240,
+    "throughput_kbps": 985.7527916827108,
+    "retransmissions": 0,
+    "time_ms": 10388,
+    "drop_rate": 0.0,
+    "crypto": false,
+    "cc_enabled": true,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "Sem perdas (CC off)",
+    "packets_sent": 10240,
+    "throughput_kbps": 944.2139234670354,
+    "retransmissions": 0,
+    "time_ms": 10845,
+    "drop_rate": 0.0,
+    "crypto": false,
+    "cc_enabled": false,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "5% perdas (CC on)",
+    "packets_sent": 10240,
+    "throughput_kbps": 36.34788905374803,
+    "retransmissions": 533,
+    "time_ms": 281722,
+    "drop_rate": 0.05,
+    "crypto": false,
+    "cc_enabled": true,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "5% perdas (CC off)",
+    "packets_sent": 10240,
+    "throughput_kbps": 36.230089372271244,
+    "retransmissions": 536,
+    "time_ms": 282638,
+    "drop_rate": 0.05,
+    "crypto": false,
+    "cc_enabled": false,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "10% perdas (CC on)",
+    "packets_sent": 10240,
+    "throughput_kbps": 17.732553608938314,
+    "retransmissions": 1117,
+    "time_ms": 577469,
+    "drop_rate": 0.1,
+    "crypto": false,
+    "cc_enabled": true,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "10% perdas (CC off)",
+    "packets_sent": 10240,
+    "throughput_kbps": 17.08822631219722,
+    "retransmissions": 1156,
+    "time_ms": 599243,
+    "drop_rate": 0.1,
+    "crypto": false,
+    "cc_enabled": false,
+    "data_mb": 10.0
+  },
+  {
+    "scenario": "Sem perdas + Crypto (CC on)",
+    "packets_sent": 10240,
+    "throughput_kbps": 714.0366780559236,
+    "retransmissions": 0,
+    "time_ms": 14341,
+    "drop_rate": 0.0,
+    "crypto": true,
+    "cc_enabled": true,
+    "data_mb": 10.0
+  }
+]

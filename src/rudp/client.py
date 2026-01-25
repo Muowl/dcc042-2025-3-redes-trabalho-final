@@ -33,10 +33,12 @@ class TransferStats:
 class RUDPClient:
     """Cliente RUDP com 3-way handshake, criptografia e controle de congestionamento."""
     
-    def __init__(self, host: str, port: int, timeout_s: float = 1.0, use_crypto: bool = True):
+    def __init__(self, host: str, port: int, timeout_s: float = 1.0, 
+                 use_crypto: bool = True, cc_enabled: bool = True):
         self.host = host
         self.port = port
         self.timeout_s = timeout_s
+        self.cc_enabled = cc_enabled  # Controle de congestionamento
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(timeout_s)
         self.conn = Connection()
@@ -49,6 +51,7 @@ class RUDPClient:
         else:
             self.crypto = NoCrypto()
             log.info("Criptografia desabilitada")
+        log.info("Controle de congestionamento: %s", "ON" if cc_enabled else "OFF")
     
     def connect(self) -> bool:
         """Executa 3-way handshake: SYN → SYN-ACK → ACK."""
@@ -171,8 +174,13 @@ class RUDPClient:
         cwnd_history = []
         
         # Inicializar CC
-        self.conn.cwnd = INITIAL_CWND
-        self.conn.ssthresh = INITIAL_SSTHRESH
+        if self.cc_enabled:
+            self.conn.cwnd = INITIAL_CWND
+            self.conn.ssthresh = INITIAL_SSTHRESH
+        else:
+            # CC desabilitado: janela fixa grande
+            self.conn.cwnd = 10000
+            self.conn.ssthresh = 10000
         
         # Fragmentar em chunks
         chunks = [data[i:i+PAYLOAD_SIZE] for i in range(0, len(data), PAYLOAD_SIZE)]
@@ -213,22 +221,24 @@ class RUDPClient:
                 bytes_sent += len(chunk)
                 
                 # Controle de congestionamento: sucesso
-                if retries == 0:
-                    # Sem timeout: aumentar cwnd
-                    if self.conn.cwnd < self.conn.ssthresh:
-                        # Slow Start: dobra (cresce exponencialmente)
-                        self.conn.cwnd = min(self.conn.cwnd * 2, self.conn.ssthresh)
-                        log.debug("Slow Start: cwnd → %d", self.conn.cwnd)
+                if self.cc_enabled:
+                    if retries == 0:
+                        # Sem timeout: aumentar cwnd
+                        if self.conn.cwnd < self.conn.ssthresh:
+                            # Slow Start: dobra (cresce exponencialmente)
+                            self.conn.cwnd = min(self.conn.cwnd * 2, self.conn.ssthresh)
+                            log.debug("Slow Start: cwnd → %d", self.conn.cwnd)
+                        else:
+                            # Congestion Avoidance: cresce linearmente
+                            self.conn.cwnd += 1
+                            log.debug("Congestion Avoidance: cwnd → %d", self.conn.cwnd)
                     else:
-                        # Congestion Avoidance: cresce linearmente
-                        self.conn.cwnd += 1
-                        log.debug("Congestion Avoidance: cwnd → %d", self.conn.cwnd)
-                else:
-                    # Houve timeout/retransmissão: reduzir
-                    self.conn.ssthresh = max(self.conn.cwnd // 2, 1)
-                    self.conn.cwnd = INITIAL_CWND
-                    log.debug("Timeout detectado: ssthresh=%d, cwnd=%d", 
-                             self.conn.ssthresh, self.conn.cwnd)
+                        # Houve timeout/retransmissão: reduzir
+                        self.conn.ssthresh = max(self.conn.cwnd // 2, 1)
+                        self.conn.cwnd = INITIAL_CWND
+                        log.debug("Timeout detectado: ssthresh=%d, cwnd=%d", 
+                                 self.conn.ssthresh, self.conn.cwnd)
+                # Se CC desabilitado, cwnd permanece fixo
             else:
                 log.error("Falha ao enviar pacote seq=%d, abortando", self.conn.local_seq)
                 break
