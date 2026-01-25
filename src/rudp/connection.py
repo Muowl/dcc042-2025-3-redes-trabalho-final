@@ -30,8 +30,8 @@ class Connection:
     
     # Buffer de dados recebidos (servidor) - em ordem
     recv_buffer: bytes = field(default=b"")
-    recv_buffer_max: int = 65536  # Limite do buffer (64KB default)
-    
+    recv_buffer_max: int = 16 * 1024 * 1024  # Limite do buffer (~16MB) para >=10k pacotes
+        
     # Controle de fluxo (cliente)
     remote_wnd: int = 64    # rwnd anunciado pelo servidor (em pacotes)
     
